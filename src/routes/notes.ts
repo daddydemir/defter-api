@@ -92,12 +92,13 @@ export async function notesRoutes(app: FastifyInstance): Promise<void> {
   })
 
   app.post('/', async (req, reply) => {
-    const { title, content, folderId, isPinned, tagIds } = req.body as {
+    const { title, content, folderId, isPinned, tagIds, source } = req.body as {
       title?: string
       content?: string
       folderId?: string | null
       isPinned?: boolean
       tagIds?: string[]
+      source?: string
     }
 
     const titleText = title?.trim() || 'Untitled'
@@ -125,6 +126,22 @@ export async function notesRoutes(app: FastifyInstance): Promise<void> {
       }
 
       let safeFolder = folderId ?? null
+      if (source === 'browser-extension') {
+        // Eklenti notları gelen kutusunu doldurmasın; kullanıcıya ait tek bir özel klasörde toplansın.
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1 || ':browser-extension'))", [userId(req)])
+        const existing = await client.query(
+          "SELECT id FROM folders WHERE user_id = $1 AND name = 'Browser Eklentisi' ORDER BY created_at LIMIT 1",
+          [userId(req)],
+        )
+        if (existing.rows.length) safeFolder = existing.rows[0].id
+        else {
+          const created = await client.query(
+            "INSERT INTO folders (name, user_id) VALUES ('Browser Eklentisi', $1) RETURNING id",
+            [userId(req)],
+          )
+          safeFolder = created.rows[0].id
+        }
+      }
       if (safeFolder) {
         const f = await client.query('SELECT 1 FROM folders WHERE id = $1 AND user_id = $2', [
           safeFolder,
