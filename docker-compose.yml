@@ -6,9 +6,10 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://postgres:change-me@localhost:5432/notes}
-      PORT: 4000
+      PORT: ${API_PORT:-29868}
       HOST: 0.0.0.0
       AUTH_SECRET: ${AUTH_SECRET:-change-me-to-a-long-random-string}
       REDIS_HOST: ${REDIS_HOST:-}
@@ -16,5 +17,7 @@ services:
       REDIS_PASS: ${REDIS_PASS:-}
       REDIS_URL: ${REDIS_URL:-}
       TURNSTILE_SECRET: ${TURNSTILE_SECRET:-}
-    ports:
-      - "${API_PORT:-29868}:4000"
+
+    # Docker bridge networking is disabled on this host, which prevents the
+    # API from reaching Cloudflare Turnstile and other external HTTPS APIs.
+    network_mode: host
