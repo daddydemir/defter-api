@@ -9,6 +9,7 @@ import { adminRoutes } from './routes/admin.js'
 import { publicRoutes } from './routes/public.js'
 import { analyticsRoutes } from './routes/analytics.js'
 import { devRoutes } from './routes/dev.js'
+import { trashRoutes } from './routes/trash.js'
 import { attachMetrics } from './metrics.js'
 import { attachRateLimit } from './rateLimit.js'
 
@@ -25,6 +26,7 @@ export function buildApp() {
   app.register(friendsRoutes, { prefix: '/api/friends' })
   app.register(adminRoutes, { prefix: '/api/admin' })
   app.register(notesRoutes, { prefix: '/api/notes' })
+  app.register(trashRoutes, { prefix: '/api/trash' })
   app.register(publicRoutes, { prefix: '/api' })
   app.register(analyticsRoutes, { prefix: '/api' })
   app.register(devRoutes, { prefix: '/api/dev' })

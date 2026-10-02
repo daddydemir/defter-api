@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { randomBytes } from 'node:crypto'
+import { brotliCompressSync, constants as zlibConstants } from 'node:zlib'
 import { pool } from '../db.js'
 import { mapNote, notFound, badRequest, forbidden } from '../utils.js'
 import { requireAuth } from '../auth.js'
@@ -278,14 +279,73 @@ export async function notesRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const { access } = await accessFor(id, userId(req))
+    const me = userId(req)
+    const { access } = await accessFor(id, me)
     if (access !== 'owner') return access === 'none' ? notFound(reply) : forbidden(reply)
-    const { rows } = await pool.query('DELETE FROM notes WHERE id = $1 AND user_id = $2 RETURNING id', [
-      id,
-      userId(req),
-    ])
-    if (!rows.length) return notFound(reply)
-    return reply.code(204).send()
+
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const noteResult = await client.query(
+        `SELECT id, title, content, folder_id, is_pinned, share_token, created_at, updated_at
+         FROM notes WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+        [id, me],
+      )
+      if (!noteResult.rows.length) {
+        await client.query('ROLLBACK')
+        return notFound(reply)
+      }
+      const note = noteResult.rows[0]
+      const [tagResult, shareResult] = await Promise.all([
+        client.query(
+          `SELECT t.id, t.name FROM tags t JOIN note_tags nt ON nt.tag_id = t.id
+           WHERE nt.note_id = $1 ORDER BY t.name`,
+          [id],
+        ),
+        client.query(
+          `SELECT id, user_id, permission, created_at FROM note_shares
+           WHERE note_id = $1 ORDER BY created_at`,
+          [id],
+        ),
+      ])
+      const snapshot = {
+        note: {
+          id: note.id,
+          title: note.title,
+          content: note.content,
+          folderId: note.folder_id,
+          isPinned: note.is_pinned,
+          shareToken: note.share_token,
+          createdAt: note.created_at,
+          updatedAt: note.updated_at,
+        },
+        tags: tagResult.rows,
+        shares: shareResult.rows.map((share) => ({
+          id: share.id,
+          userId: share.user_id,
+          permission: share.permission,
+          createdAt: share.created_at,
+        })),
+      }
+      const raw = Buffer.from(JSON.stringify(snapshot), 'utf8')
+      const compressed = brotliCompressSync(raw, {
+        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 6 },
+      })
+      await client.query(
+        `INSERT INTO trash_items
+           (user_id, original_id, item_type, title, compressed_data, compression, original_size, compressed_size)
+         VALUES ($1, $2, 'note', $3, $4, 'brotli', $5, $6)`,
+        [me, id, note.title, compressed, raw.length, compressed.length],
+      )
+      await client.query('DELETE FROM notes WHERE id = $1 AND user_id = $2', [id, me])
+      await client.query('COMMIT')
+      return reply.code(204).send()
+    } catch (error) {
+      await client.query('ROLLBACK')
+      throw error
+    } finally {
+      client.release()
+    }
   })
 
   // ---------- Paylaşım yönetimi (yalnızca sahip) ----------
